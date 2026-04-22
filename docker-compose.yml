@@ -1,0 +1,172 @@
+version: '3.8'
+
+services:
+
+  # ══════════════════════════════════════════════════════
+  # Infrastructure: MariaDB + RabbitMQ
+  # ══════════════════════════════════════════════════════
+
+  mariadb:
+    image: mariadb:11
+    container_name: cine_mariadb
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: cinepass
+      MYSQL_DATABASE: movie_ticket
+      MYSQL_ROOT_HOST: '%'
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    ports:
+      - "3306:3306"
+    networks:
+      - cine_net
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--su-mysql", "--connect", "--innodb_initialized"]
+      start_period: 20s
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: cine_rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"
+      - "15672:15672"   # Management UI → http://localhost:15672
+    networks:
+      - cine_net
+    healthcheck:
+      test: ["CMD", "rabbitmqctl", "status"]
+      start_period: 40s
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  # ══════════════════════════════════════════════════════
+  # Microservices
+  # ══════════════════════════════════════════════════════
+
+  user-service:
+    build:
+      context: ./user-service
+    container_name: cine_user
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      PORT: "8081"
+      DB_HOST: mariadb
+      DB_USER: root
+      DB_PASS: cinepass
+      DB_NAME: movie_ticket
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      JWT_SECRET: movie_ticket_super_secret_2024
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - cine_net
+
+  movie-service:
+    build:
+      context: ./movie-service
+    container_name: cine_movie
+    restart: unless-stopped
+    ports:
+      - "8082:8082"
+    environment:
+      PORT: "8082"
+      DB_HOST: mariadb
+      DB_USER: root
+      DB_PASS: cinepass
+      DB_NAME: movie_ticket
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    networks:
+      - cine_net
+
+  booking-service:
+    build:
+      context: ./booking-service
+    container_name: cine_booking
+    restart: unless-stopped
+    ports:
+      - "8083:8083"
+    environment:
+      PORT: "8083"
+      DB_HOST: mariadb
+      DB_USER: root
+      DB_PASS: cinepass
+      DB_NAME: movie_ticket
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - cine_net
+
+  payment-notification:
+    build:
+      context: ./payment-notification
+    container_name: cine_payment
+    restart: unless-stopped
+    ports:
+      - "8084:8084"
+    environment:
+      PORT: "8084"
+      DB_HOST: mariadb
+      DB_USER: root
+      DB_PASS: cinepass
+      DB_NAME: movie_ticket
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - cine_net
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # nginx proxies /api/* internally → no CORS, no hardcoded IPs
+        VITE_USER_SERVICE: /api/user
+        VITE_MOVIE_SERVICE: /api/movie
+        VITE_BOOKING_SERVICE: /api/booking
+        VITE_PAYMENT_SERVICE: /api/payment
+    container_name: cine_frontend
+    restart: unless-stopped
+    ports:
+      - "8085:80"
+    depends_on:
+      - user-service
+      - movie-service
+      - booking-service
+      - payment-notification
+    networks:
+      - cine_net
+
+# ══════════════════════════════════════════════════════
+# Volumes & Networks
+# ══════════════════════════════════════════════════════
+
+volumes:
+  mariadb_data:
+    name: cine_mariadb_data
+
+networks:
+  cine_net:
+    name: cine_network
+    driver: bridge
