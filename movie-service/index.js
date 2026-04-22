@@ -21,6 +21,7 @@ async function initDB() {
     waitForConnections: true,
     connectionLimit: 10,
   });
+  await db.execute('SELECT 1'); // Verify connection
   console.log('[MovieService] ✅ MariaDB connected');
 }
 
@@ -112,8 +113,21 @@ app.get('/health', (req, res) =>
 );
 
 // ─── Start ─────────────────────────────────────────────────────────────────
+async function withRetry(fn, name, retries = 20, delayMs = 4000) {
+  for (let i = 1; i <= retries; i++) {
+    try {
+      await fn();
+      return;
+    } catch (err) {
+      if (i === retries) throw err;
+      console.log(`[${name}] Attempt ${i}/${retries} failed: ${err.message}. Retrying in ${delayMs}ms...`);
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+}
+
 async function start() {
-  await initDB();
+  await withRetry(initDB, 'MariaDB');
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n🚀 [MovieService] Running on http://0.0.0.0:${PORT}`);
     console.log('   GET  /movies');

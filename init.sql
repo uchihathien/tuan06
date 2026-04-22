@@ -6,6 +6,11 @@
 CREATE DATABASE IF NOT EXISTS movie_ticket CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE movie_ticket;
 
+-- Ensure root can connect from any host within Docker network
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' IDENTIFIED BY 'cinepass' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+
+
 -- Users table
 CREATE TABLE IF NOT EXISTS users (
   id INT AUTO_INCREMENT PRIMARY KEY,
